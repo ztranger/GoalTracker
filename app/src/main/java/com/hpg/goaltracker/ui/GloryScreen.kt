@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hpg.goaltracker.data.Goal
+import com.hpg.goaltracker.ui.theme.Dimens
 import com.hpg.goaltracker.ui.theme.Gold
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -39,6 +40,7 @@ fun GloryScreen(
     goals: List<Goal>,
     onDuplicate: (Goal) -> Unit,
     onDelete: (Goal) -> Unit,
+    onOpenDetail: (Goal) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (goals.isEmpty()) {
@@ -68,6 +70,7 @@ fun GloryScreen(
                 goal = goal,
                 onDuplicate = { onDuplicate(goal) },
                 onDelete = { onDelete(goal) },
+                onOpenDetail = { onOpenDetail(goal) },
                 modifier = Modifier.animateItem()
             )
         }
@@ -79,12 +82,14 @@ private fun GloryCard(
     goal: Goal,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
+    onOpenDetail: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showDelete by remember { mutableStateOf(false) }
     Card(
+        onClick = onOpenDetail,
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(Dimens.CardRadius),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         border = androidx.compose.foundation.BorderStroke(1.5.dp, Gold.copy(alpha = 0.6f))

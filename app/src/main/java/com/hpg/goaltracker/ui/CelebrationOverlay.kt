@@ -44,6 +44,19 @@ import com.hpg.goaltracker.ui.theme.GoalAccentColors
 import kotlin.math.sin
 import kotlin.random.Random
 
+private val CELEBRATIONS = listOf(
+    "Цель достигнута!" to "Эта цель отправляется в Зал славы 🏆",
+    "Победа! 🎉" to "Ты довёл дело до конца — так держать!",
+    "Ты справился!" to "Ещё одна вершина покорена 🚀",
+    "Легенда! 👑" to "Цель закрыта и уходит в Зал славы.",
+    "Невероятно! ✨" to "Дисциплина и упорство победили 💪",
+)
+
+private fun celebrationCopy(id: String): Pair<String, String> {
+    val idx = ((id.hashCode() % CELEBRATIONS.size) + CELEBRATIONS.size) % CELEBRATIONS.size
+    return CELEBRATIONS[idx]
+}
+
 private data class Confetto(
     val x: Float,
     val baseY: Float,
@@ -97,9 +110,10 @@ fun CelebrationOverlay(goal: Goal, onDismiss: () -> Unit) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    val (headline, subtitle) = remember(goal.id) { celebrationCopy(goal.id) }
                     PulsingTrophy()
                     Text(
-                        "Цель достигнута!",
+                        headline,
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary,
@@ -112,7 +126,7 @@ fun CelebrationOverlay(goal: Goal, onDismiss: () -> Unit) {
                         textAlign = TextAlign.Center
                     )
                     Text(
-                        "Поздравляем! Эта цель отправляется в Зал славы 🏆",
+                        subtitle,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center

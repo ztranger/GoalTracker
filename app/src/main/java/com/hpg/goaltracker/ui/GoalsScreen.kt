@@ -1,10 +1,18 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package com.hpg.goaltracker.ui
 
+import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,20 +24,25 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,13 +51,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import com.hpg.goaltracker.data.DeadlineStatus
 import com.hpg.goaltracker.data.Goal
 import com.hpg.goaltracker.data.GoalType
+import com.hpg.goaltracker.data.currentStreak
+import com.hpg.goaltracker.data.deadlineBadge
+import com.hpg.goaltracker.data.deadlineStatus
+import com.hpg.goaltracker.ui.theme.Dimens
 
 @Composable
 fun GoalsScreen(
@@ -56,24 +82,62 @@ fun GoalsScreen(
     onDuplicate: (Goal) -> Unit,
     onDelete: (Goal) -> Unit,
     onToggleNotify: (Goal) -> Unit,
+    onCreate: () -> Unit,
+    onTemplates: () -> Unit,
+    onOpenDetail: (Goal) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (goals.isEmpty()) {
         EmptyState(
             emoji = "🎯",
             title = "Пока нет целей",
-            subtitle = "Нажмите «+», чтобы поставить первую цель и начать свой путь к победам.",
+            subtitle = "Поставьте первую цель — и начните свой путь к победам.",
+            actionLabel = "Создать первую цель",
+            onAction = onCreate,
+            secondaryLabel = "Выбрать из шаблонов",
+            onSecondary = onTemplates,
             modifier = modifier
         )
         return
     }
+    var todayOnly by remember { mutableStateOf(false) }
+    var sortMode by remember { mutableStateOf(SortMode.CREATED) }
+    var categoryFilter by remember { mutableStateOf<String?>(null) }
+    val categories = remember(goals) { goals.mapNotNull { it.category.ifBlank { null } }.distinct() }
+    val displayed = remember(goals, todayOnly, sortMode, categoryFilter) {
+        goals.filter { !todayOnly || it.type != GoalType.DAILY || it.isScheduledToday() }
+            .filter { categoryFilter == null || it.category == categoryFilter }
+            .let { sortGoals(it, sortMode) }
+    }
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp, 12.dp, 16.dp, 96.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentPadding = PaddingValues(Dimens.s16, Dimens.s12, Dimens.s16, 96.dp),
+        verticalArrangement = Arrangement.spacedBy(Dimens.s12)
     ) {
-        items(goals, key = { it.id }) { goal ->
-            GoalCard(
+        item {
+            GoalsHeader(
+                todayOnly = todayOnly,
+                onTodayChange = { todayOnly = it },
+                sortMode = sortMode,
+                onSortChange = { sortMode = it },
+                categories = categories,
+                categoryFilter = categoryFilter,
+                onCategoryChange = { categoryFilter = it }
+            )
+        }
+        if (displayed.isEmpty()) {
+            item {
+                Text(
+                    "Сегодня нет целей по расписанию 😌",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 24.dp)
+                )
+            }
+        }
+        items(displayed, key = { it.id }) { goal ->
+            SwipeGoalCard(
                 goal = goal,
                 onCheckIn = { onCheckIn(goal) },
                 onChangeCount = { delta -> onChangeCount(goal, delta) },
@@ -82,8 +146,156 @@ fun GoalsScreen(
                 onDuplicate = { onDuplicate(goal) },
                 onDelete = { onDelete(goal) },
                 onToggleNotify = { onToggleNotify(goal) },
+                onOpenDetail = { onOpenDetail(goal) },
                 modifier = Modifier.animateItem()
             )
+        }
+    }
+}
+
+enum class SortMode { CREATED, PROGRESS, STREAK, NAME }
+
+private fun sortLabel(mode: SortMode): String = when (mode) {
+    SortMode.CREATED -> "Новые"
+    SortMode.PROGRESS -> "Прогресс"
+    SortMode.STREAK -> "Серия"
+    SortMode.NAME -> "Название"
+}
+
+private fun sortGoals(list: List<Goal>, mode: SortMode): List<Goal> = when (mode) {
+    SortMode.CREATED -> list.sortedByDescending { it.createdAt }
+    SortMode.PROGRESS -> list.sortedByDescending { it.fraction }
+    SortMode.STREAK -> list.sortedByDescending { if (it.type == GoalType.DAILY) it.currentStreak() else 0 }
+    SortMode.NAME -> list.sortedBy { it.title.lowercase() }
+}
+
+@Composable
+private fun GoalsHeader(
+    todayOnly: Boolean,
+    onTodayChange: (Boolean) -> Unit,
+    sortMode: SortMode,
+    onSortChange: (SortMode) -> Unit,
+    categories: List<String>,
+    categoryFilter: String?,
+    onCategoryChange: (String?) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            FilterChip(selected = !todayOnly, onClick = { onTodayChange(false) }, label = { Text("Все") })
+            GapW(8)
+            FilterChip(selected = todayOnly, onClick = { onTodayChange(true) }, label = { Text("Сегодня") })
+            Spacer(Modifier.weight(1f))
+            var open by remember { mutableStateOf(false) }
+            Box {
+                TextButton(onClick = { open = true }) { Text("⇅ ${sortLabel(sortMode)}") }
+                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                    SortMode.entries.forEach { mode ->
+                        DropdownMenuItem(
+                            text = { Text(sortLabel(mode)) },
+                            onClick = { onSortChange(mode); open = false }
+                        )
+                    }
+                }
+            }
+        }
+        if (categories.isNotEmpty()) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = categoryFilter == null,
+                    onClick = { onCategoryChange(null) },
+                    label = { Text("Все категории") }
+                )
+                categories.forEach { c ->
+                    FilterChip(
+                        selected = categoryFilter == c,
+                        onClick = { onCategoryChange(c) },
+                        label = { Text(c) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SwipeGoalCard(
+    goal: Goal,
+    onCheckIn: () -> Unit,
+    onChangeCount: (Int) -> Unit,
+    onSetCount: (Int) -> Unit,
+    onEdit: () -> Unit,
+    onDuplicate: () -> Unit,
+    onDelete: () -> Unit,
+    onToggleNotify: () -> Unit,
+    onOpenDetail: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            when (value) {
+                SwipeToDismissBoxValue.StartToEnd -> {
+                    when (goal.type) {
+                        GoalType.DAILY -> if (goal.canCheckInNow()) onCheckIn()
+                        GoalType.COUNT -> if (goal.progress < goal.target) onChangeCount(1)
+                    }
+                    false // snap back, keep the card
+                }
+                SwipeToDismissBoxValue.EndToStart -> {
+                    onDelete()
+                    true
+                }
+                SwipeToDismissBoxValue.Settled -> false
+            }
+        }
+    )
+    SwipeToDismissBox(
+        state = dismissState,
+        modifier = modifier,
+        backgroundContent = { SwipeBackground(dismissState.dismissDirection) }
+    ) {
+        GoalCard(
+            goal = goal,
+            onCheckIn = onCheckIn,
+            onChangeCount = onChangeCount,
+            onSetCount = onSetCount,
+            onEdit = onEdit,
+            onDuplicate = onDuplicate,
+            onDelete = onDelete,
+            onToggleNotify = onToggleNotify,
+            onOpenDetail = onOpenDetail
+        )
+    }
+}
+
+@Composable
+private fun SwipeBackground(direction: SwipeToDismissBoxValue) {
+    val color = when (direction) {
+        SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.secondary
+        SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.error
+        else -> Color.Transparent
+    }
+    val alignment = when (direction) {
+        SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
+        else -> Alignment.CenterEnd
+    }
+    val label = when (direction) {
+        SwipeToDismissBoxValue.StartToEnd -> "✓ Отметить"
+        SwipeToDismissBoxValue.EndToStart -> "Удалить 🗑"
+        else -> ""
+    }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(Dimens.CardRadius))
+            .background(color)
+            .padding(horizontal = 24.dp),
+        contentAlignment = alignment
+    ) {
+        if (label.isNotEmpty()) {
+            Text(label, color = Color.White, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -98,6 +310,7 @@ fun GoalCard(
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
     onToggleNotify: () -> Unit,
+    onOpenDetail: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val accent = goal.accentColor()
@@ -105,15 +318,19 @@ fun GoalCard(
     var showCountDialog by remember { mutableStateOf(false) }
 
     Card(
+        onClick = onOpenDetail,
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(Dimens.CardRadius),
+        colors = CardDefaults.cardColors(
+            containerColor = accent.copy(alpha = 0.05f).compositeOver(MaterialTheme.colorScheme.surface)
+        ),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(Dimens.s16)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                GoalAvatar(goal)
+                ProgressAvatar(goal, goal.fraction)
                 GapW(12)
+                val streak = if (goal.type == GoalType.DAILY) goal.currentStreak() else 0
                 Column(Modifier.weight(1f)) {
                     Text(
                         goal.title,
@@ -121,11 +338,32 @@ fun GoalCard(
                         fontWeight = FontWeight.Bold,
                         maxLines = 2
                     )
-                    Text(
-                        goal.subtitle(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            goal.subtitle(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                        val badge = goal.deadlineBadge()
+                        if (badge != null) {
+                            GapW(8)
+                            Text(
+                                badge,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = when (goal.deadlineStatus()) {
+                                    DeadlineStatus.OVERDUE -> MaterialTheme.colorScheme.error
+                                    DeadlineStatus.BEHIND -> MaterialTheme.colorScheme.tertiary
+                                    else -> MaterialTheme.colorScheme.secondary
+                                }
+                            )
+                        }
+                    }
+                }
+                if (streak > 0) {
+                    GapW(8)
+                    StreakBadge(streak)
                 }
                 GoalMenu(
                     notify = goal.notify,
@@ -136,7 +374,7 @@ fun GoalCard(
                 )
             }
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(Dimens.s16))
 
             Row(
                 Modifier.fillMaxWidth(),
@@ -146,19 +384,17 @@ fun GoalCard(
                 Text(
                     "${goal.progress} / ${goal.target}${if (goal.unit.isNotBlank()) " ${goal.unit}" else ""}",
                     style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                val animatedPercent by animateIntAsState(goal.percent, tween(700), label = "pct")
                 Text(
-                    "${goal.percent}%",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
+                    "$animatedPercent%",
+                    style = MaterialTheme.typography.headlineSmall,
                     color = accent
                 )
             }
-            Spacer(Modifier.height(6.dp))
-            ProgressBar(fraction = goal.fraction, color = accent)
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(Dimens.s16))
 
             when (goal.type) {
                 GoalType.DAILY -> DailyAction(goal = goal, onCheckIn = onCheckIn)
@@ -190,30 +426,31 @@ fun GoalCard(
 }
 
 @Composable
-private fun ProgressBar(fraction: Float, color: Color) {
-    val animated by animateFloatAsState(targetValue = fraction, animationSpec = tween(600), label = "progress")
-    LinearProgressIndicator(
-        progress = { animated },
+private fun DailyAction(goal: Goal, onCheckIn: () -> Unit) {
+    val scheduledToday = goal.isScheduledToday()
+    val canCheckIn = goal.canCheckInNow()
+    val label = when {
+        !scheduledToday -> "Сегодня отдых  😌"
+        canCheckIn -> "Отметить сегодня  ✓"
+        else -> "Готово на сегодня  🎉"
+    }
+    val view = LocalView.current
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.97f else 1f, label = "checkInPress")
+
+    FilledTonalButton(
+        onClick = {
+            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            onCheckIn()
+        },
+        enabled = canCheckIn,
+        interactionSource = interaction,
         modifier = Modifier
             .fillMaxWidth()
-            .height(12.dp)
-            .clip(RoundedCornerShape(6.dp)),
-        color = color,
-        trackColor = color.copy(alpha = 0.15f),
-        gapSize = 0.dp,
-        drawStopIndicator = {}
-    )
-}
-
-@Composable
-private fun DailyAction(goal: Goal, onCheckIn: () -> Unit) {
-    val canCheckIn = goal.canCheckInNow()
-    FilledTonalButton(
-        onClick = onCheckIn,
-        enabled = canCheckIn,
-        modifier = Modifier.fillMaxWidth()
+            .scale(scale)
     ) {
-        Text(if (canCheckIn) "Отметить сегодня  ✓" else "Готово на сегодня  🎉")
+        Text(label)
     }
 }
 
@@ -221,7 +458,7 @@ private fun DailyAction(goal: Goal, onCheckIn: () -> Unit) {
 private fun CountAction(goal: Goal, onChangeCount: (Int) -> Unit, onOpenInput: () -> Unit) {
     Row(
         Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(Dimens.s8),
         verticalAlignment = Alignment.CenterVertically
     ) {
         StepButton("−", enabled = goal.progress > 0) { onChangeCount(-1) }
@@ -238,8 +475,8 @@ private fun StepButton(label: String, enabled: Boolean, onClick: () -> Unit) {
         onClick = onClick,
         enabled = enabled,
         shape = CircleShape,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
-        modifier = Modifier.size(44.dp)
+        contentPadding = PaddingValues(0.dp),
+        modifier = Modifier.size(Dimens.MinTouch)
     ) {
         Text(label, fontSize = 20.sp, fontWeight = FontWeight.Bold)
     }
@@ -256,7 +493,12 @@ private fun GoalMenu(
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
-            Text("⋮", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "⋮",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.clearAndSetSemantics { contentDescription = "Действия с целью" }
+            )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
@@ -298,12 +540,12 @@ private fun CountInputDialog(
                     "Укажите, сколько уже достигнуто (цель: $target${if (unit.isNotBlank()) " $unit" else ""}).",
                     style = MaterialTheme.typography.bodyMedium
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(Dimens.s12))
                 OutlinedTextField(
                     value = text,
                     onValueChange = { new -> text = new.filter { it.isDigit() }.take(7) },
                     singleLine = true,
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     suffix = { if (unit.isNotBlank()) Text(unit) }
                 )
             }
@@ -333,28 +575,48 @@ fun ConfirmDeleteDialog(title: String, onConfirm: () -> Unit, onDismiss: () -> U
 }
 
 @Composable
-fun EmptyState(emoji: String, title: String, subtitle: String, modifier: Modifier = Modifier) {
+fun EmptyState(
+    emoji: String,
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+    secondaryLabel: String? = null,
+    onSecondary: (() -> Unit)? = null,
+) {
     Box(modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(emoji, fontSize = 64.sp)
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(Dimens.s16))
             Text(
                 title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
+                style = MaterialTheme.typography.titleLarge
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Dimens.s8))
             Text(
                 subtitle,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                textAlign = TextAlign.Center
             )
+            if (actionLabel != null && onAction != null) {
+                Spacer(Modifier.height(Dimens.s24))
+                Button(onClick = onAction) {
+                    Text(actionLabel, fontWeight = FontWeight.Bold)
+                }
+            }
+            if (secondaryLabel != null && onSecondary != null) {
+                Spacer(Modifier.height(Dimens.s8))
+                OutlinedButton(onClick = onSecondary) {
+                    Text(secondaryLabel)
+                }
+            }
         }
     }
 }
 
 private fun Goal.subtitle(): String = when (type) {
-    GoalType.DAILY -> if (periodDays <= 1) "Ежедневная привычка" else "Каждые $periodDays дн."
+    GoalType.DAILY -> scheduleLabel(activeDays)
     GoalType.COUNT -> "Цель на количество"
 }

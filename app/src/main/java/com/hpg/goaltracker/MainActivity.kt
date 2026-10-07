@@ -13,8 +13,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import com.hpg.goaltracker.data.AppSettings
 import com.hpg.goaltracker.notify.Reminders
 import com.hpg.goaltracker.ui.GoalTrackerApp
 import com.hpg.goaltracker.ui.GoalViewModel
@@ -29,16 +35,26 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         Reminders.ensureChannel(this)
-        Reminders.scheduleDaily(this)
+        Reminders.scheduleAll(this)
 
         setContent {
-            GoalTrackerTheme {
+            var themeMode by remember { mutableIntStateOf(AppSettings.themeMode(this)) }
+            var dynamicColor by remember { mutableStateOf(AppSettings.dynamicColor(this)) }
+
+            GoalTrackerTheme(themeMode = themeMode, dynamicColor = dynamicColor) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     NotificationPermissionGate()
-                    GoalTrackerApp(viewModel)
+                    GoalTrackerApp(
+                        vm = viewModel,
+                        onThemeChanged = { mode, dynamic ->
+                            themeMode = mode
+                            dynamicColor = dynamic
+                            AppSettings.setTheme(this, mode, dynamic)
+                        }
+                    )
                 }
             }
         }

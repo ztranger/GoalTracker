@@ -1,11 +1,16 @@
 package com.hpg.goaltracker.ui.theme
 
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import com.hpg.goaltracker.data.AppSettings
 
 private val DarkColorScheme = darkColorScheme(
     primary = Violet,
@@ -53,10 +58,23 @@ private val LightColorScheme = lightColorScheme(
 
 @Composable
 fun GoalTrackerTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    themeMode: Int = AppSettings.THEME_SYSTEM,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val darkTheme = when (themeMode) {
+        AppSettings.THEME_LIGHT -> false
+        AppSettings.THEME_DARK -> true
+        else -> isSystemInDarkTheme()
+    }
+    val colorScheme = when {
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+            val context = LocalContext.current
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        }
+        darkTheme -> DarkColorScheme
+        else -> LightColorScheme
+    }
     MaterialTheme(
         colorScheme = colorScheme,
         typography = Typography,

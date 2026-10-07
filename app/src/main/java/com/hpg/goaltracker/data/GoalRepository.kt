@@ -22,6 +22,19 @@ class GoalRepository private constructor(context: Context) {
 
     init {
         _goals.value = readFromDisk()
+        cleanupOrphanImages()
+    }
+
+    /** Removes stored image files no longer referenced by any goal (undo-safe housekeeping). */
+    private fun cleanupOrphanImages() {
+        runCatching {
+            val dir = File(appContext.filesDir, "images")
+            if (!dir.isDirectory) return
+            val referenced = _goals.value.mapNotNull { it.imagePath }.toHashSet()
+            dir.listFiles()?.forEach { f ->
+                if (f.absolutePath !in referenced) f.delete()
+            }
+        }
     }
 
     fun snapshot(): List<Goal> = _goals.value
@@ -39,14 +52,56 @@ class GoalRepository private constructor(context: Context) {
     }
 
     fun delete(id: String) {
-        val target = _goals.value.firstOrNull { it.id == id }
-        target?.imagePath?.let { runCatching { File(it).delete() } }
+        // Image files are kept so a delete can be undone; orphans are swept on next launch.
         commit(_goals.value.filterNot { it.id == id })
+    }
+
+    /**
+     * Applies a daily check-in if currently allowed; returns the updated goal,
+     * or null if not eligible. Usable without a ViewModel (widget / notification).
+     */
+    fun checkInDaily(id: String): Goal? {
+        val goal = _goals.value.firstOrNull { it.id == id } ?: return null
+        if (!goal.canCheckInNow()) return null
+        val now = System.currentTimeMillis()
+        val newProgress = (goal.progress + 1).coerceAtMost(goal.target)
+        val updated = goal.copy(
+            progress = newProgress,
+            checkIns = goal.checkIns + now,
+            lastCheckIn = now,
+            completedAt = if (newProgress >= goal.target && goal.completedAt == null) now else goal.completedAt
+        )
+        upsert(updated)
+        return updated
+    }
+
+    /** Serializes all goals to a pretty-printed JSON string for backup/export. */
+    fun exportJson(): String {
+        val arr = JSONArray()
+        _goals.value.forEach { arr.put(it.toJson()) }
+        return arr.toString(2)
+    }
+
+    /** Parses a backup JSON string into goals (throws on malformed input). */
+    fun parseJson(json: String): List<Goal> {
+        val arr = JSONArray(json)
+        return (0 until arr.length()).map { goalFromJson(arr.getJSONObject(it)) }
+    }
+
+    /** Replaces all goals with [list]. */
+    fun replaceAll(list: List<Goal>) = commit(list)
+
+    /** Merges [incoming] into existing goals by id (incoming wins on conflicts). */
+    fun mergeAll(incoming: List<Goal>) {
+        val byId = _goals.value.associateBy { it.id }.toMutableMap()
+        incoming.forEach { byId[it.id] = it }
+        commit(byId.values.toList())
     }
 
     private fun commit(list: List<Goal>) {
         _goals.value = list
         writeToDisk(list)
+        runCatching { com.hpg.goaltracker.widget.GoalWidgetProvider.refresh(appContext) }
     }
 
     private fun writeToDisk(list: List<Goal>) {
@@ -83,11 +138,25 @@ private fun Goal.toJson(): JSONObject = JSONObject().apply {
     put("type", type.name)
     put("target", target)
     put("periodDays", periodDays)
+    put("activeDays", activeDays)
+    put("deadline", deadline ?: JSONObject.NULL)
+    put("category", category)
     put("progress", progress)
     put("unit", unit)
     put("createdAt", createdAt)
     put("completedAt", completedAt ?: JSONObject.NULL)
     put("lastCheckIn", lastCheckIn ?: JSONObject.NULL)
+    put("checkIns", JSONArray(checkIns))
+    put("frozenDays", JSONArray(frozenDays))
+    put("notes", JSONArray().apply {
+        notes.forEach { n ->
+            put(JSONObject().apply {
+                put("dayKey", n.dayKey)
+                put("text", n.text)
+                put("mood", n.mood)
+            })
+        }
+    })
     put("notify", notify)
 }
 
@@ -100,10 +169,25 @@ private fun goalFromJson(o: JSONObject): Goal = Goal(
     type = runCatching { GoalType.valueOf(o.getString("type")) }.getOrDefault(GoalType.DAILY),
     target = o.getInt("target"),
     periodDays = o.optInt("periodDays", 1),
+    activeDays = o.optInt("activeDays", WeekMask.ALL_DAYS),
+    deadline = if (o.isNull("deadline")) null else o.optLong("deadline"),
+    category = o.optString("category", ""),
     progress = o.optInt("progress", 0),
     unit = o.optString("unit", ""),
     createdAt = o.optLong("createdAt", System.currentTimeMillis()),
     completedAt = if (o.isNull("completedAt")) null else o.getLong("completedAt"),
     lastCheckIn = if (o.isNull("lastCheckIn")) null else o.getLong("lastCheckIn"),
+    checkIns = o.optJSONArray("checkIns")?.let { arr ->
+        (0 until arr.length()).map { arr.getLong(it) }
+    } ?: emptyList(),
+    frozenDays = o.optJSONArray("frozenDays")?.let { arr ->
+        (0 until arr.length()).map { arr.getLong(it) }
+    } ?: emptyList(),
+    notes = o.optJSONArray("notes")?.let { arr ->
+        (0 until arr.length()).map { i ->
+            val n = arr.getJSONObject(i)
+            DayNote(n.getLong("dayKey"), n.optString("text", ""), n.optString("mood", ""))
+        }
+    } ?: emptyList(),
     notify = o.optBoolean("notify", true),
 )

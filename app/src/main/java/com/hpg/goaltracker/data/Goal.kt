@@ -14,6 +14,13 @@ import kotlin.math.roundToInt
  */
 enum class GoalType { DAILY, COUNT }
 
+/** A note (and optional mood emoji) attached to a specific day. */
+data class DayNote(
+    val dayKey: Long,
+    val text: String,
+    val mood: String = "",
+)
+
 data class Goal(
     val id: String = UUID.randomUUID().toString(),
     val title: String,
@@ -23,11 +30,23 @@ data class Goal(
     val type: GoalType,
     val target: Int,
     val periodDays: Int = 1,
+    /** For DAILY goals: weekdays the habit is scheduled on (see [WeekMask]). */
+    val activeDays: Int = WeekMask.ALL_DAYS,
+    /** Optional target date (local midnight) by which to finish. */
+    val deadline: Long? = null,
+    /** Optional category/tag for grouping and filtering. */
+    val category: String = "",
     val progress: Int = 0,
     val unit: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val completedAt: Long? = null,
     val lastCheckIn: Long? = null,
+    /** Timestamps of every progress action, used for streaks and activity stats. */
+    val checkIns: List<Long> = emptyList(),
+    /** Day-keys (local midnights) protected by a streak freeze. */
+    val frozenDays: List<Long> = emptyList(),
+    /** Optional notes/mood attached to specific days. */
+    val notes: List<DayNote> = emptyList(),
     val notify: Boolean = true,
 ) {
     val isCompleted: Boolean get() = completedAt != null
@@ -39,12 +58,17 @@ data class Goal(
 
     val remaining: Int get() = (target - progress).coerceAtLeast(0)
 
-    /** For DAILY goals: whether a new check-in is allowed in the current period. */
+    /** For DAILY goals: whether today is a scheduled weekday for this habit. */
+    fun isScheduledToday(now: Long = System.currentTimeMillis()): Boolean =
+        type != GoalType.DAILY || WeekMask.isToday(activeDays, now)
+
+    /** For DAILY goals: whether a check-in is allowed right now (scheduled day, not yet done). */
     fun canCheckInNow(now: Long = System.currentTimeMillis()): Boolean {
         if (isCompleted) return false
         if (type != GoalType.DAILY) return true
+        if (!WeekMask.isToday(activeDays, now)) return false
         val last = lastCheckIn ?: return true
-        return daysBetween(last, now) >= periodDays.coerceAtLeast(1)
+        return daysBetween(last, now) >= 1
     }
 
     companion object {
